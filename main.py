@@ -6,7 +6,7 @@ from arg import Args
 
 class Get_valute:
     def __init__(self):
-        self.period = args.period
+        self.period = period
         self.old_exchange_rate = {
                     'rub': None,
                     'usd': None,
@@ -24,8 +24,6 @@ class Get_valute:
                 }
                 global all_info_about_valute
                 all_info_about_valute = {'old_valute': self.old_exchange_rate, 'actual_valute': self.new_data_valute}
-                for i in self.new_data_valute.keys():
-                    self.old_exchange_rate[i] = self.new_data_valute[i]
 
     async def start_get_valute(self):
         url = f"https://openexchangerates.org/api/latest.json?app_id=3d3a6f24e1644a66a070bd8af9e6aaec&base=USD"
@@ -36,23 +34,25 @@ class Get_valute:
 
 class Balance(Get_valute):
     def __init__(self, post_data=None, need_valute=None):
+        super().__init__()
         self.old_balance = old_balance
         self.balance = balance
-        self.base_valute = 'USD'
         self.post_data = post_data
         self.need_valute = need_valute
 
     async def check_change_valute(self):
-        await asyncio.sleep(3)
-        print(self.balance, self.old_balance)
+        await asyncio.sleep(2)
         if self.old_balance != self.balance:
             logger.warning(
                 f'Balance has been changed!\nOld balance: {self.old_balance}\nActual balance: {self.balance}')
-            self.old_balance = self.balance
+            for i in self.old_balance.keys():
+                self.old_balance[i] = self.balance[i]
         if all_info_about_valute['actual_valute'] != all_info_about_valute['old_valute']:
             logger.warning(
                 f'Currency exchange rate has been changed!\nOld сurrency exchange rate: {all_info_about_valute["old_valute"]}\nActual сurrency exchange rate: {all_info_about_valute["actual_valute"]}')
-        await asyncio.sleep(2)
+            for i in all_info_about_valute['actual_valute'].keys():
+                all_info_about_valute['old_valute'][i] = all_info_about_valute['actual_valute'][i]
+        await asyncio.sleep(58)
         loop.create_task(self.check_change_valute())
 
     async def set_balance(self):
@@ -72,14 +72,15 @@ class Balance(Get_valute):
         return balance
 
     async def sum_every_valutes(self):
-        self.rub = balance['rub']
-        self.usd = balance['usd']
-        self.eur = balance['eur']
-        self.data_balance = all_info_about_valute['actual_valute']
-        self.sum_rub = self.rub + self.usd * self.data_balance['rub'] + self.eur * self.data_balance['usd'] * self.data_balance['rub']
-        self.sum_usd = self.usd + self.rub / self.usd + self.eur / self.usd
-        resp = [self.sum_rub, self.sum_usd]
-        return resp
+        self.rub_balance = balance['rub']
+        self.usd_balance = balance['usd']
+        self.eur_balance = balance['eur']
+        self.data_exchange_rate = all_info_about_valute['actual_valute']
+        self.sum_rub = self.rub_balance + self.usd_balance * self.data_exchange_rate['rub'] + self.eur_balance * self.data_exchange_rate['eur'] * self.data_exchange_rate['rub']
+        self.sum_usd = self.usd_balance + self.rub_balance / self.data_exchange_rate['rub'] + self.eur_balance * self.data_exchange_rate['eur']
+        self.sum_eur = (self.rub_balance / self.data_exchange_rate['rub'] + self.usd_balance) * self.data_exchange_rate['eur'] + self.eur_balance
+        response = {'rub': round(self.sum_rub, 2), 'usd': round(self.sum_usd, 2), 'eur': round(self.sum_eur, 2)}
+        return response
 
 
 async def background_tasks(app):
@@ -115,17 +116,20 @@ class API:
 
     async def get_balance_all_valutes(self, request):
         balance = await Balance().get_balance()
-        return web.Response(text=f'Актуальный  баланс для каждой валюты: {balance}',
+        return web.Response(text=f'На рублевом счете: {balance["rub"]} рублей,\n'
+                                 f'На долларовом счете: {balance["usd"]} долларов,\n'
+                                 f'На евро счете: {balance["eur"]} евро',
                             headers={"content-type": "text/plain"})
 
     async def modify_balance(self, request):
         data = await request.json()
         updated_balance = await Balance(post_data=data).modify_balance()
-        return web.Response(text=f'Баланс кошельков изменен!\nНовый баланс: {updated_balance}')
+        return web.Response(text=f'Баланс кошельков изменен!\nНовый баланс: {updated_balance}', headers={"content-type": "text/plain"})
 
     async def get_amount(self, request):
         balances = await Balance().sum_every_valutes()
-        return web.Response(text=f'Балансы кошельков: {balances}')
+        text = f'Баланс в рублях: {balances["rub"]},\nБаланс в долларах: {balances["usd"]},\nБаланс в евро: {balances["eur"]}'
+        return web.Response(text=f'Балансы кошельков:\n{text}', headers={"content-type": "text/plain"})
 
 
 if __name__ == '__main__':
@@ -133,20 +137,21 @@ if __name__ == '__main__':
     args = Args().get_args()
     old_balance = {'rub': args.rub, 'usd': args.usd, 'eur': args.eur}
     balance = {'rub': args.rub, 'usd': args.usd, 'eur': args.eur}
-    old_exchange_rate = None
     period = args.period
     logger.debug('App is started')
     if args.debug.lower() in {'1', 'true', 'y'}:
         logger.info('Logger is active')
     elif args.debug.lower() in {'0', 'false', 'n'}:
+        logger.info('Logger is inactive!')
         logger.disabled = True
     loop = asyncio.get_event_loop()
     data_valute_ = {}
     app.add_routes([web.post('/amount/set', api.set_balance),
-                    web.get('/get/rub', api.get_rub),
-                    web.get('/get/eur', api.get_eur),
-                    web.get('/get/usd', api.get_usd),
+                    web.get('/rub/get', api.get_rub),
+                    web.get('/eur/get', api.get_eur),
+                    web.get('/usd/get', api.get_usd),
                     web.get('/amount/get', api.get_amount),
-                    web.post('/modify', api.modify_balance)
+                    web.post('/modify', api.modify_balance),
+                    web.get('/', api.get_balance_all_valutes)
                     ])
     start_server()
